@@ -41,13 +41,69 @@ In this task, you will create a simulation of a card or dice game of your choice
 
 You don't need to necessarily simulate the full game mechanism, but you do need to implement enough of the game mechanism that you can identify an interesting probability question in your game and answer the question using a simulation.
 
+### Scenario Description
+
+When I was a kid, my parents taught my siblings and I to play hearts by describing the rules: the goal was to get rid of all of your hearts by burying them in other tricks.  
+
+Bicycle Cards describes the rules as follows: 
+
+> OBJECT OF THE GAME
+To be the player with the lowest score at the end of the game. When one player hits the agreed-upon score or higher, the game ends; and the player with the lowest score wins.
+
+> CARD VALUES/SCORING
+> At the end of each hand, players count the number of hearts they have taken as well as the queen of spades, if applicable. Hearts count as one point each and the queen counts 13 points.    
+Each heart - 1 point    
+The Q - 13 points    
+The aggregate total of all scores for each hand must be a multiple of 26.    
+The game is usually played to 100 points (some play to 50).    
+When a player takes all 13 hearts and the queen of spades in one hand, instead of losing 26 points, that player scores zero and each of his opponents score an additional 26 points.
+
+At any rate, my parents left off the last part of the scoring mechanism, figuring that it was too complicated strategically for my siblings and I (I was the oldest and was about 11 at the time, so my younger brother would have been 6 or so). 
+
+We started playing, and I ended up crying as we got to the end of the round, because I had collected every possible heart. I was *so mad* that despite my best attempts at strategy, I had lost so terribly.
+
+When they counted the cards up, I had accidentally "shot the moon", and my dad got to explain that I'd actually won that round instead of losing it horribly.
+
+What I'd like to know is whether or not my parents actually made a reasonable call - what is the probability that a completely naive player who doesn't know the full set of rules of the game accidentally shoots the moon? (I'm assuming that at 11 my strategic skills were not developed enough to do more than simple optimization of strategy).
+
 ### Set up your objects
 
-First, you must set up a data frame describing all possible values of your playing items. For instance, if you are using a standard deck of 52 playing cards, you'll need a data frame which has columns for suit and value, and you may want to make value a factor variable (your call on that one). If your game requires that players hold cards in their hand, you may also want to have a column indicating location (deck, discard, player_x). 
+> First, you must set up a data frame describing all possible values of your playing items. For instance, if you are using a standard deck of 52 playing cards, you'll need a data frame which has columns for suit and value, and you may want to make value a factor variable (your call on that one). If your game requires that players hold cards in their hand, you may also want to have a column indicating location (deck, discard, player_x). 
+
+```{r}
+library(tidyverse)
+# make the cards ordered correctl
+card_values <- factor(1:13, labels = c(2:10, "Jack", "Queen", "King", "Ace"))
+suit <- c("hearts", "diamonds", "spades", "clubs")
+
+deck_of_cards <- tidyr::crossing(suit, value = card_values) %>%
+  mutate(points = (suit == "hearts") + 
+           13*(suit == "spades" & value == "Queen"))
+# it's often easier to add two logical statements 
+# together and weight one of them than to create a 
+# compound if function or a table that you could 
+# use to make another join.
+```
+
+So I've created a standard deck of cards, and assigned each card the point value it has when scoring a game of hearts. 
+
 
 ### Write one or more functions to simulate the basic game mechanisms
 
-For instance, if you are simulating set, you need to have a function that draws 12 cards from the deck. You may want an auxiliary function which determines if a set is present.
+> For instance, if you are simulating set, you need to have a function that draws 12 cards from the deck. You may want an auxiliary function which determines if a set is present.
+
+```{r}
+deal_hands <- function(deck, players = 1:4) {
+  # Must have between 3 and 5 players"
+  stopifnot(length(players) >= 3, length(players) <=5)
+  deck %>%
+    # shuffle the rows
+    slice_sample(n = nrow(deck)) %>%
+    mutate(player = rep(players, length.out = n())) %>%
+    arrange(player, suit, value)
+}
+
+```
 
 ### Identify a probability question you can answer with your simulation
 
