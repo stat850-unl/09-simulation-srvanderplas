@@ -9,19 +9,6 @@ knitr::opts_chunk$set(echo = TRUE)
 options(digits = 3)
 ```
 
-```{r load-sas-libraries, echo = F, message = F, warning = F}
-
-library(SASmarkdown)
-sas_enginesetup(sashtml=sashtml)
-
-sasexe <- "C:/Program Files/SASHome/SASFoundation/9.4/sas.exe"
-sasopts <- "-nosplash -ls 75"
-
-# Linux options (for grading, please leave this in!)
-# sasexe <- "/usr/local/SASHome/SASFoundation/9.4/bin/sas_en"
-# sasopts <- "-ls 75"
-```
-
 ## Instructions
 
 When you are finished with the assignment:
@@ -72,7 +59,7 @@ What I'd like to know is whether or not my parents actually made a reasonable ca
 
 ```{r}
 library(tidyverse)
-# make the cards ordered correctl
+# make the cards ordered correctly
 card_values <- factor(1:13, labels = c(2:10, "Jack", "Queen", "King", "Ace"))
 suit <- c("hearts", "diamonds", "spades", "clubs")
 
@@ -85,7 +72,7 @@ deck_of_cards <- tidyr::crossing(suit, value = card_values) %>%
 # use to make another join.
 ```
 
-So I've created a standard deck of cards, and assigned each card the point value it has when scoring a game of hearts. 
+I've created a standard deck of cards, and assigned each card the point value it has when scoring a game of hearts. 
 
 
 ### Write one or more functions to simulate the basic game mechanisms
@@ -95,7 +82,20 @@ So I've created a standard deck of cards, and assigned each card the point value
 ```{r}
 deal_hands <- function(deck, players = 1:4) {
   # Must have between 3 and 5 players"
-  stopifnot(length(players) >= 3, length(players) <=5)
+  stopifnot(length(players) >= 3, length(players) <= 5)
+  
+  # Rules to ensure that deck is evenly divisible
+  # I'm deviating slightly from the official Bicycle rules to make things a bit easier
+  if (length(players) == 3) {
+    deck <- deck %>%
+      filter(!(suit == "diamonds" & value == "2"))
+  } else if (length(players) == 5) {
+    deck <- deck %>%
+      filter(!(suit %in% c("diamonds", "spades") & value == "2"))
+  }
+  
+  # Now, assign players to cards (or cards to players) and sort hands based
+  # on value and suit
   deck %>%
     # shuffle the rows
     slice_sample(n = nrow(deck)) %>%
@@ -103,11 +103,28 @@ deal_hands <- function(deck, players = 1:4) {
     arrange(player, suit, value)
 }
 
+set.seed(20201013) # set the seed for reproducibility
+test_deck <- deal_hands(deck_of_cards)
 ```
+
+This function assigns a player to each card in the deck. From here, we could split the data frame up in a number of different ways (e.g. have player-specific data frames) but for now, lets not.
+
 
 ### Identify a probability question you can answer with your simulation
 
-For instance, if you are simulating set, you may want to know the probability that an array of 12 cards does not contain a set. (You can check your answers by reading the rules of the game, if you want). If you are simulating blackjack, you may want to know what the [expected return on a specific strategy is](https://towardsdatascience.com/python-blackjack-simulator-61b591ffb971) (hint: if you're beating the dealer, your simulation is probably wrong). 
+> For instance, if you are simulating set, you may want to know the probability that an array of 12 cards does not contain a set. (You can check your answers by reading the rules of the game, if you want). If you are simulating blackjack, you may want to know what the [expected return on a specific strategy is](https://towardsdatascience.com/python-blackjack-simulator-61b591ffb971) (hint: if you're beating the dealer, your simulation is probably wrong). 
+
+Fundamentally, my question is what the probability is that a player using relatively little strategy accidentally "shoots the moon". 
+
+To do that, I have to write a few more functions to describe legal play:
+
+1. Hearts can't be played as the first card until either:
+  - the queen of spades is played, or
+  - the player only has hearts left
+2. Players must follow suit when possible.
+
+Other than those rules, I am going to avoid adding any other strategic components: players will randomly select from cards which can be legally played to determine what card is played first
+
 
 ### Design a simulation to answer the question you identified
 
@@ -117,4 +134,401 @@ Describe any issues you encountered in your simulation, and how you addressed th
 
 
 
+#### Functions to handle playing hearts
+
+##### Selecting a card to play
+
+I started out with this function that handles the logic of choosing which card to play once the lead suit is known for the trick. 
+```{r}
+pick_card <- function(cards, sel_suit, hearts_avail = F) {
+  if (sel_suit %in% cards$suit) {
+    # 2 of clubs is always selected first; if that's an option it is the first trick
+    club2 <- tibble(suit = "clubs", value = "2")
+    play <- inner_join(cards, club2, by = c("suit", "value"))
+    
+    # If there is no 2 of clubs, then play according to the suit
+    if (nrow(play) == 0) 
+    play <- filter(cards, suit == sel_suit) %>% 
+      slice_sample(n = 1)
+  } else {
+    # Does the player have something besides hearts to play?
+    non_hearts <- length(setdiff(cards$suit, "hearts")) > 0
+    if (!hearts_avail & non_hearts) {
+      # if hearts aren't available and there are other suits, draw from those
+      play <- filter(cards, suit != "hearts") %>%
+        slice_sample(n = 1)
+    } else {
+      # Otherwise, player can do whatever they want
+      play <- slice_sample(cards, n = 1)
+    } 
+  }
+  return(play)
+}
+```
+
+Then I tested this function out a bit...
+```{r}
+# player 3 has the 2 of clubs
+filter(test_deck, player == 3) %>%
+pick_card("clubs")
+
+# What will player 1 play?
+# replicate lets us repeat a scenario 50 times to see what happens each time.
+# Each result is a tibble, so if we tell it not to simplify the results into a vector,
+# we can just bind all of the rows together afterwards.
+replicate(50, {
+  filter(test_deck, player == 1) %>%
+    pick_card(sel_suit = "clubs")
+}, simplify = F) %>%
+  bind_rows() %>%
+  # Now group by basically everything and count up the replications to see
+  # if there is anything that's significant
+  group_by(suit, value, points, player) %>%
+  count()
+```
+
+The end result is that player 1 never plays anything but clubs, which is proper given that there are clubs available and they must play in suit. So far, so good.
+
+But, this doesn't help if there is no suit selected (i.e. when we're the lead player and trying to decide what card to play). In the very first trick, clubs is always the lead suit, but after that, we have to be a bit trickier. Rather than writing two functions, can we write a single function that will handle both situations gracefully?
+
+```{r}
+pick_card <- function(cards, sel_suit = NA, hearts_avail = F) {
+  # add default sel_suit = NA to indicate not selected - this mostly applies
+  # to the first card played in each trick that isn't the first trick
+  if (is.na(sel_suit)) {
+      # if hearts aren't available, filter them out
+      if (!hearts_avail) cards <- filter(cards, suit != "hearts")
+      
+      # then select a card randomly
+      play <- slice_sample(cards, n = 1)
+    
+    return(play)
+  }
+  
+  # If suit is selected we use slightly different logic:
+  if (sel_suit %in% cards$suit) {
+     # 2 of clubs is always selected first; if that's an option it is the first trick
+    club2 <- tibble(suit = "clubs", value = "2")
+    play <- inner_join(cards, club2, by = c("suit", "value"))
+    
+    # If there is no 2 of clubs, then play according to the suit
+    if (nrow(play) == 0) {
+      play <- filter(cards, suit == sel_suit) %>% 
+        slice_sample(n = 1)
+    }
+  } else {
+    # Does the player have something besides hearts to play?
+    non_hearts <- length(setdiff(cards$suit, "hearts")) > 0
+    if (!hearts_avail & non_hearts) {
+      # if hearts aren't available and there are other suits, draw from those
+      play <- filter(cards, suit != "hearts") %>%
+        slice_sample(n = 1)
+    } else {
+      # Otherwise, player can do whatever they want
+      play <- slice_sample(cards, n = 1)
+    } 
+  }
+  return(play)
+}
+```
+
+But this function logic is getting complicated and hard to untangle. Let's rewrite it in a more modular way:
+```{r}
+# Check whether the 2 of clubs is available
+pick_first <- function(cards) {
+  # Check for 2 of clubs
+  # 2 of clubs is always selected first; if that's an option it is the first trick
+  inner_join(cards, 
+             tibble(suit = "clubs", value = "2"), 
+             by = c("suit", "value"))
+}
+
+# Check whether there's a card in the selected suit
+pick_card_in_suit <- function(cards, sel_suit = NA) {
+  # if sel_suit is NA, this will return nothing
+  filter(cards, suit == sel_suit) %>%
+  slice_sample(n = 1)
+}
+
+# Check whether there's a card in another suit
+pick_card_out_suit <- function(cards, hearts_avail = F) {
+  card_options <- cards
+  onlyhearts <- sum(cards$suit != "hearts") > 0
+  # If hearts aren't available and there are other suits, filter out the hearts
+  if (!onlyhearts | hearts_avail) {
+    card_options <- cards %>% filter(suit != "hearts")
+  }
+  
+  slice_sample(card_options, n = 1)
+}
+
+pick_card <- function(cards, sel_suit = NA, hearts_avail = F) {
+  play <- pick_first(cards)
+  
+  # Try picking a card of the selected suit
+  if (nrow(play) == 0) {
+    play <- pick_card_in_suit(cards, sel_suit)
+  }
+  
+  # Otherwise, try picking a card outside of the selected suit
+  if (nrow(play) == 0) {
+    play <- pick_card_out_suit(cards, hearts_avail)
+  }
+  
+  return(play)
+}
+
+```
+
+This is about the same amount of code, but it's much more readable in several smaller functions.
+
+To test this function out it's useful to play out a fragment of a game inside a single code chunk (this will help us write the function, when we need to do so in a bit):
+
+```{r}
+# First, lets simulate the first round:
+hands <- test_deck %>%
+  nest(hand = -player)
+# This creates a column named "hand" where each entry is a data frame containing
+# the cards in a single player's hand.
+
+round1 <- tibble() # start with an empty tibble
+for (df in hands$hand) {
+  round1 <- bind_rows(round1, pick_card(df, "clubs", hearts_avail = F))
+}
+round1 <- round1 %>%
+  mutate(player = hands$player)
+
+# Then we remove round1 from the deck:
+test_deck_round2 <- anti_join(test_deck, round1)
+
+# And determine who is leading the next round:
+lead_round2 <- round1 %>% arrange(desc(value)) %>% slice(1) %>% pluck("player")
+
+lead_card_options <- replicate(50, {
+  filter(test_deck, player == lead_round2) %>%
+    pick_card(sel_suit = NA)
+}, simplify = F) %>% 
+  bind_rows() %>%
+  group_by(suit, value) %>%
+  count()
+
+lead_card_options
+
+# What didn't get selected?
+filter(test_deck, player == lead_round2) %>%
+  anti_join(lead_card_options)
+
+# As expected, the only card not chosen was the heart, 
+# and since players can't lead with hearts yet, 
+# everything appears to be working as expected.
+```
+
+Now that we've checked that the first card of a trick works, let's go ahead and check to make sure that the remaining cards selected by the other players are reasonable:
+
+```{r}
+hands <- test_deck_round2 %>%
+  nest(hand = -player)
+
+# Define a quick function to replicate the card sampling process a few times
+# and aggregate the results
+quick_card_sample_aggregate <- function(handx, suitx, heartsx = F) {
+  replicate(50, pick_card(handx, suitx, heartsx), simplify = F) %>%
+    bind_rows() %>%
+    group_by(suit, value) %>%
+    count()
+}
+
+# This is the faster way to go - use the function above and then just see
+# what the aggregate results look like...
+crossing(player = c(1, 3, 4), suit_sel = suit) %>%
+  mutate(
+    # map2 takes two arguments and passes them to a function
+    # in this case, the hand data frame and the suit selection
+    card_selected = purrr::map2(hands$hand[player], suit_sel, .f = quick_card_sample_aggregate)
+  ) %>%
+  unnest(card_selected) %>%
+  group_by(suit_sel, suit) %>%
+  count(wt = n)
+```
+This is just testing to see that in round 2, with the initial test deck we have, there aren't any players who can't match the initially played suit. 
+
+My code used a convenience function and the `map2` function from the purrr package. This saves a lot of typing, but it isn't something you've seen formally yet. 
+[Here](round-2-test-sampling-straightforward.R) is a way to do it using things that you mostly have seen before, but it's a lot more typing and a lot less organized.
+
+In the first couple of tricks, it is likely that each player has all 4 suits of cards. Let's create a different scenario to ensure that the function performs correctly as we've been using it:
+
+```{r}
+last_3_tricks <- test_deck_round2 %>%
+  group_by(player) %>%
+  sample_n(3) # 3 cards for each player
+
+# This should pick a card from each player because we are passing in a grouped tibble
+pick_card(last_3_tricks, sel_suit = "diamonds")
+# But it doesn't because not all players have diamonds available 
+# (and it just silently skips those, yikes!)
+
+# This picks a card from each player individually
+last_3_tricks %>% 
+  nest(hand = -player) %>%
+  mutate(hand = purrr::map(hand, ~pick_card(., sel_suit = "diamonds", hearts_avail = T))) %>%
+  unnest(hand)
+```
+
+The pick_card function seems like it works with grouped data (picking one card per player), but that is an illusion, because if one player doesn't have the right suit of cards, it doesn't work properly. Let's write a `pick_indiv_cards` function that will handle things correctly (we'll use the `pick_cards` function inside of this function so we don't have to redo the logic):
+
+```{r}
+pick_player_cards <- function(hand, sel_suit = NA, hearts_avail = F) {
+  res <- hand %>%
+    nest(hand = -player)
+  
+  # I'm writing this without purrr because you don't know it yet
+  for (i in 1:nrow(res)) {
+    res$hand[[i]] <- pick_card(res$hand[[i]], sel_suit = sel_suit, hearts_avail = hearts_avail)
+  }
+  
+  res %>%
+    unnest(hand)
+}
+
+pick_player_cards(last_3_tricks, "diamonds", hearts_avail = T)
+```
+
+This behaves the way we expect.
+
+Note, this isn't the most efficient way to write this code. I'm letting it evolve as I write it, but I'm not really factoring in computational efficiency yet. You can worry about efficiency after you have working code and functions that make sense. 
+
+##### Playing a full trick
+
+```{r}
+# for this function, we assume deck is going to have a player for each card in the deck
+# and that cards which have been played already will have been removed
+pick_trick <- function(deck, lead_player = NA, hearts_avail = F) {
+  # Check that everyone has a card to play
+  stopifnot(nrow(deck) >= length(deck$player))
+  
+  # lead player is not determined for first trick - it's person with 2 of clubs
+  if (is.na(lead_player)) {
+    # use pick_card here because we only care about a single player
+    lead_card <- pick_card(deck, sel_suit = "clubs")
+    lead_player <- lead_card$player
+  } else {
+    lead_card <- deck %>% filter(lead_player == player) %>% pick_card()
+  }
+  
+  # assess whether hearts can be played based on the lead card
+  hearts_avail <- hearts_avail | (lead_card$points > 0)
+  
+  # collect the remaining cards
+  # technically, we should do this player-by-player, but the only difference
+  # is whether hearts can be played or not. Lets hand-wave and make use of 
+  # the fact that slice_sample() works with groups so that we don't have to
+  # specify the order of play...
+  trick <- deck %>% 
+    filter(player != lead_player) %>% 
+    group_by(player) %>% 
+    # use pick_indiv_cards here because there are multiple players
+    pick_indiv_cards(sel_suit = lead_card$suit, hearts_avail = hearts_avail)
+  
+  # combine the cards together
+  trick <- bind_rows(lead_card, trick) %>%
+    mutate(in_suit = (suit == lead_card$suit)) %>%
+    # order so that the first card in the trick is the winner of this hand
+    arrange(desc(in_suit), desc(value)) %>%
+    # keep track of who has which cards
+    mutate(cards_to = player[1]) %>%
+    # also keep track of whether hearts can be lead yet
+    mutate(hearts_avail = hearts_avail | sum(points) > 0)
+  
+  return(trick)
+}
+```
+
+Now we have a function to play a trick, so let's see if it works by testing out the first trick:
+```{r}
+trick_1 <- pick_trick(test_deck, lead_player = NA)
+trick_1
+```
+We can keep going...
+```{r}
+trick_2 <- test_deck %>% 
+  # Remove cards from deck that were played in trick 1
+  anti_join(trick_1, by = c("suit", "value")) %>%
+  # Get cards for a new trick
+  pick_trick(lead_player = trick_1$player[1], hearts_avail = trick_1$hearts_avail[1])
+trick_2
+
+
+trick_3 <- test_deck %>% 
+  # Remove cards from deck that were played in trick 1 and 2
+  anti_join(trick_1, by = c("suit", "value")) %>%
+  anti_join(trick_2, by = c("suit", "value")) %>%
+  # Get cards for a new trick
+  pick_trick(lead_player = trick_2$player[1], hearts_avail = trick_2$hearts_avail[1])
+trick_3
+
+# Might be easier to keep track of cards in a "played" and "unplayed" deck
+played <- bind_rows(trick_1, trick_2, trick_3)
+unplayed <- anti_join(test_deck, played, by = c("suit", "value"))
+
+trick_4 <- unplayed %>%
+  # Get cards for a new trick
+  pick_trick(lead_player = trick_3$player[1], hearts_avail = sum(played$hearts_avail) > 0)
+trick_4
+
+```
+
+##### Playing a full game
+
+First, we need a function that will keep track of the deck for us - basically, we need a played and unplayed data frame, and then a counter for who is responsible for leading the trick. If at any point the played deck has a point card, then hearts are available for future tricks.
+
+It may also help to keep track of what trick we're on, so let's add the logic for that as well.
+
+```{r}
+play_trick <- function(unplayed, played, lead_player) {
+  if (nrow(played) == 0) {
+    trick_num <- 1
+  } else {
+    trick_num <- max(played$trick_num) + 1
+  }
+  
+  hearts_avail <- sum(played$points) > 0
+  current_trick <- pick_trick(unplayed, 
+                              lead_player = lead_player, 
+                              hearts_avail = hearts_avail) %>%
+    mutate(trick_num = trick_num)
+  
+  unplayed <- anti_join(unplayed, current_trick, by = c("suit", "value"))
+  played <- bind_rows(played, current_trick)
+  lead = unique(current_trick$cards_to)
+  
+  return(list(unplayed = unplayed,
+              played = played,
+              lead_player = lead))
+}
+
+
+card_values <- factor(1:13, labels = c(2:10, "Jack", "Queen", "King", "Ace"))
+suit <- c("hearts", "diamonds", "spades", "clubs")
+
+game_of_hearts <- function(players = 1:4) {
+  # start with the full deck
+  deck_of_cards <- tidyr::crossing(suit, value = card_values) %>%
+    mutate(points = (suit == "hearts") + 
+             13*(suit == "spades" & value == "Queen"))
+  
+  hands <- deal_hands(deck_of_cards, players = players)
+  
+  # get total number of tricks:
+  ntricks <- hands %>% group_by(player) %>% count() %>% pluck("n") %>% unique()
+  
+  res <- list(unplayed = hands, played = tibble(), lead_player = NA)
+  for (trick in 1:2) {
+    res <- play_trick(res$unplayed, res$played, res$lead_player)
+  }
+  
+  return(res$played)
+}
+
+game_of_hearts()
+```
 
