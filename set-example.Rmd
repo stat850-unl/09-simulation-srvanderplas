@@ -1,0 +1,143 @@
+---
+title: "Homework: Simulation"
+author: "Firstname Lastname"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+options(digits = 3)
+```
+
+## Instructions
+
+When you are finished with the assignment:
+
+1. Save the file as 09_Lastname_Firstname.Rmd and compile it
+2. Commit the Rmd file and corresponding html file to your homework git repo
+3. Push the commit to github
+4. Locate the Rmd file on github and click on the SHA link for the file
+5. Paste the url of the resulting page into Canvas to submit your assignment.
+
+Your assignment must compile on a different computer as long as the saspath is set correctly for that machine.
+This means you will need to use a local file path when you read the data in via R (and SAS).
+
+## Is it in the cards?
+
+In this task, you will create a simulation of a card or dice game of your choice. You might consider games such as [set](https://en.wikipedia.org/wiki/Set_(card_game)), [farkle](https://www.dicegamedepot.com/farkle-rules/), [blackjack](https://bicyclecards.com/how-to-play/blackjack/#filter), [war](https://bicyclecards.com/how-to-play/war/#filter), or [go fish](https://bicyclecards.com/how-to-play/go-fish/#filter). You may choose any game that can be assessed probabilistically -- you may want to avoid games which require a large amount of strategy, skill, and bluffing, such as poker. 
+
+You don't need to necessarily simulate the full game mechanism, but you do need to implement enough of the game mechanism that you can identify an interesting probability question in your game and answer the question using a simulation.
+
+### Scenario Description
+
+![Set game box](https://images-na.ssl-images-amazon.com/images/I/71C1Dm82YjL._AC_SL1000_.jpg)
+
+Set is a card game based on combinations. There are 4 different characteristics of a set card:
+
+- number of shapes (1, 2, 3)
+- shape fill (solid, empty, lines)
+- shape type (oval, squiggle, diamond)
+- color (red, green, purple)
+
+There are thus 3x3x3x3 = 81 cards in a set deck. [See the full deck here](https://upload.wikimedia.org/wikipedia/commons/8/8e/Set_isomorphic_cards.svg)
+
+A set consists of 3 cards which are either all the same or all different across each characteristic.
+
+![A set where each card is completely different (across all 4 dimensions)](https://upload.wikimedia.org/wikipedia/commons/8/8f/Set-game-cards.png)
+
+
+### Set up your objects
+
+First, you must set up a data frame describing all possible values of your playing items. For instance, if you are using a standard deck of 52 playing cards, you'll need a data frame which has columns for suit and value, and you may want to make value a factor variable (your call on that one). If your game requires that players hold cards in their hand, you may also want to have a column indicating location (deck, discard, player_x). 
+
+```{r}
+library(tidyverse)
+
+set_deck <- tidyr::crossing(
+  num = 1:3,
+  color = c("red", "green", "purple"),
+  shape = c("oval", "diamond", "tilde"),
+  fill = c("solid", "empty", "lines")
+) %>%
+  mutate(id = 1:n())
+```
+
+
+### Write one or more functions to simulate the basic game mechanisms
+
+For instance, if you are simulating set, you need to have a function that draws 12 cards from the deck. You may want an auxiliary function which determines if a set is present.
+
+```{r}
+deal_set <- function(deck) {
+  sample_slice(deck, 12)
+}
+```
+
+If a set is present, then we would remove it and add 3 new cards; if a set is not present, then we would add 3 new cards (this is a rare event, according to the rules).
+
+A set can be determined uniquely from any two cards; if the cards are the same on one dimension, then the third card needs to be the same, otherwise, it needs to be different. 
+
+```{r}
+attrib_coalesce <- function(given, options) {
+  if(length(unique(given)) == 1) {
+    unique(given) # return the same value
+  } else {
+    setdiff(options, given) # return the diff value
+  }
+}
+
+# Testing the logic
+# attrib_coalesce(c("red", "red"), unique(set_deck$color))
+# attrib_coalesce(c("red", "green"), unique(set_deck$color))
+
+make_set <- function(id1, id2, deck = set_deck) {
+  opts <- tibble(
+    num = 1:3,
+    color = c("red", "green", "purple"),
+    shape = c("oval", "diamond", "tilde"),
+    fill = c("solid", "empty", "lines")
+  )
+  cards <- filter(set_deck, id %in% c(id1, id2))
+                  
+  card3 <- cards[1,1:4]
+  # this just gets the correct structure with no rows
+  
+  for(i in c("num", "color", "shape", "fill")) { # leave out id
+    card3[,i] <- attrib_coalesce(cards[[i]], opts[[i]])
+  }
+  card3$id <- inner_join(set_deck, card3)
+  return(card3$id)
+}
+
+make_set(1, 2)
+
+all_2_card_combos <- crossing(card1 = set_deck$id, card2 = set_deck$id) %>%
+  filter(card1 != card2) # get rid of duplicates
+
+all_sets <- all_2_card_combos %>%
+  mutate(card3 = purrr::map2_int(card1, card2, make_set))
+
+```
+
+```{r}
+set_present <- function(cards) {
+  
+  
+}
+
+```
+
+
+### Identify a probability question you can answer with your simulation
+
+> For instance, if you are simulating set, you may want to know the probability that an array of 12 cards does not contain a set. (You can check your answers by reading the rules of the game, if you want). If you are simulating blackjack, you may want to know what the [expected return on a specific strategy is](https://towardsdatascience.com/python-blackjack-simulator-61b591ffb971) (hint: if you're beating the dealer, your simulation is probably wrong). 
+
+
+
+
+### Design a simulation to answer the question you identified
+
+Run your simulation with an increasing number of iterations and create some sort of plot showing your results. 
+
+Describe any issues you encountered in your simulation, and how you addressed them (or where the whole thing went off the rails, if you couldn't address everything in time). 
+
