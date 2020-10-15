@@ -1,6 +1,64 @@
-deal_hands <- function(deck, players = 1:4) {
-  # Must have between 3 and 5 players"
-  stopifnot(length(players) >= 3, length(players) <= 5)
+#' This function takes a data frame of cards (with columns suit, value, and possibly points)
+#' and assigns a new column, player.
+#' Fundamentally, this is the action of dealing cards to everyone.
+#'
+#' @examples
+#' # Test it out with a mini example
+#' library(tidyverse)
+#' crossing(value = 1:10, suit = c("red", "black")) %>% # Define a mini deck
+#' deal_hand(players = c("Me", "You"))
+card_deck <- function(values = NULL,
+                      suits = c("hearts", "diamonds", "spades", "clubs"),
+                      aces_high = T) {
+  if (is.null(values)) {
+    # if values aren't specified, then use standard playing deck
+    if (aces_high) {
+      values <- factor(1:13, labels = c(2:10, "Jack", "Queen", "King", "Ace"))
+    } else {
+      values <- factor(1:13, labels = c("Ace", 2:10, "Jack", "Queen", "King"))
+    }
+  }
+
+  tidyr::crossing(suit, value = values)
+}
+
+#' Takes an object created by card_deck() and assigns points
+#'
+#' @examples
+#' card_deck() %>% hearts_points() %>% arrange(desc(points))
+hearts_points <- function(deck) {
+  deck %>%
+    mutate(points = (suit == "hearts") +
+             13*(suit == "spades" & value == "Queen"))
+}
+
+deal_hand <- function(deck, players = 1:4) {
+  # Now, assign players to cards (or cards to players) and sort hands based
+  # on value and suit
+  deck %>%
+    # shuffle the rows
+    slice_sample(n = nrow(deck)) %>%
+    mutate(player = rep(players, length.out = n())) %>%
+    arrange(player, suit, value)
+}
+
+#' This function fixes the deck to play hearts - if there are 3 or 5 players,
+#' we have to adjust the deck to handle the uneven number of cards.
+#' It also returns an error if there are fewer than 3 or more than 5 players.
+#' @examples
+#' card_deck() %>%
+#' fix_deck_hearts(players = 1:3) %>%
+#' nrow()
+#'
+#' card_deck() %>%
+#' fix_deck_hearts(players = 1:4) %>%
+#' nrow()
+#'
+#' card_deck() %>%
+#' fix_deck_hearts(players = 1:5) %>%
+#' nrow()
+fix_deck_hearts <- function(deck, players) {
+  stopifnot(length(players) > 2 & length(players) < 6) # 3, 4, 5 players allowed
 
   # Rules to ensure that deck is evenly divisible
   # I'm deviating slightly from the official Bicycle rules to make things a bit easier
@@ -12,17 +70,17 @@ deal_hands <- function(deck, players = 1:4) {
       filter(!(suit %in% c("diamonds", "spades") & value == "2"))
   }
 
-  # Now, assign players to cards (or cards to players) and sort hands based
-  # on value and suit
-  deck %>%
-    # shuffle the rows
-    slice_sample(n = nrow(deck)) %>%
-    mutate(player = rep(players, length.out = n())) %>%
-    arrange(player, suit, value)
+  return(deck)
 }
 
 
-# Check whether the 2 of clubs is available
+#' Check whether the 2 of clubs is available
+#'
+#' This function is intended to bypass the normal "lead player" protocol -
+#' if the 2 of clubs is available it must be played.
+#' Otherwise, it returns an empty data frame
+#'
+#'
 pick_first <- function(cards) {
   # Check for 2 of clubs
   # 2 of clubs is always selected first; if that's an option it is the first trick
@@ -154,7 +212,7 @@ deck_of_cards <- tidyr::crossing(suit, value = card_values) %>%
            13*(suit == "spades" & value == "Queen"))
 
 game_of_hearts <- function(players = 1:4) {
-  hands <- deal_hands(deck_of_cards, players = players)
+  hands <- deal_hand(deck_of_cards, players = players)
 
   # get total number of tricks:
   ntricks <- hands %>% group_by(player) %>% count() %>% pluck("n") %>% unique()
