@@ -5,7 +5,7 @@ output: html_document
 ---
 
 ```{r setup, include=FALSE}
-knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_chunk$set(echo = TRUE, cache = T, message = F, warning  = F)
 options(digits = 3)
 ```
 
@@ -45,10 +45,14 @@ A set consists of 3 cards which are either all the same or all different across 
 
 ![A set where each card is completely different (across all 4 dimensions)](https://upload.wikimedia.org/wikipedia/commons/8/8f/Set-game-cards.png)
 
+You can try set out online [here](https://smart-games.org/en/set_classic/start/20).
+
 
 ### Set up your objects
 
 First, you must set up a data frame describing all possible values of your playing items. For instance, if you are using a standard deck of 52 playing cards, you'll need a data frame which has columns for suit and value, and you may want to make value a factor variable (your call on that one). If your game requires that players hold cards in their hand, you may also want to have a column indicating location (deck, discard, player_x). 
+
+***
 
 ```{r}
 library(tidyverse)
@@ -59,18 +63,39 @@ set_deck <- tidyr::crossing(
   shape = c("oval", "diamond", "tilde"),
   fill = c("solid", "empty", "lines")
 ) %>%
-  mutate(id = 1:n())
+  mutate(card_id = 1:n(),
+         card_location = "deck")
 ```
 
+I've added a `card_id` number to each card for reasons that will become clear later...
 
 ### Write one or more functions to simulate the basic game mechanisms
 
 For instance, if you are simulating set, you need to have a function that draws 12 cards from the deck. You may want an auxiliary function which determines if a set is present.
 
+***
+
+I've added a note parameter that will track which round each card was dealt on; don't worry about it for now.
+
 ```{r}
-deal_set <- function(deck) {
-  sample_slice(deck, 12)
+deal_set <- function(deck, n = 12, note = NA) {
+  available <- filter(deck, card_location == "deck")
+  if (nrow(available) < n) {
+    # if there are fewer cards available than requested, deal any remaining cards
+    dealt_cards <- available$card_id
+  } else {
+    # otherwise, sample
+    dealt_cards <- sample(available$card_id, size = n, replace = F)
+  }
+  
+  deck <- deck %>%
+    mutate(card_location = ifelse(card_id %in% dealt_cards, "table", card_location))
+
+  return(deck)
 }
+
+deal_set(set_deck) %>% 
+  filter(card_location != "deck")
 ```
 
 If a set is present, then we would remove it and add 3 new cards; if a set is not present, then we would add 3 new cards (this is a rare event, according to the rules).
@@ -78,18 +103,27 @@ If a set is present, then we would remove it and add 3 new cards; if a set is no
 A set can be determined uniquely from any two cards; if the cards are the same on one dimension, then the third card needs to be the same, otherwise, it needs to be different. 
 
 ```{r}
+# This function does the hard work - if an attribute is the same across 2 given things, 
+# it returns the same value. Otherwise, it returns the "other" value not listed. 
 attrib_coalesce <- function(given, options) {
-  if(length(unique(given)) == 1) {
+  if (length(unique(given)) == 1) {
     unique(given) # return the same value
   } else {
     setdiff(options, given) # return the diff value
   }
 }
+```
 
-# Testing the logic
-# attrib_coalesce(c("red", "red"), unique(set_deck$color))
-# attrib_coalesce(c("red", "green"), unique(set_deck$color))
+Then, we test the logic:
+```{r}
+attrib_coalesce(c("red", "red"), unique(set_deck$color))
+attrib_coalesce(c("red", "green"), unique(set_deck$color))
+```
 
+To define a card, we need to get one attribute for each of 4 categories. So the `make_set` function takes two id numbers (and the corresponding deck) and picks the 3rd card required for the set.
+
+There are more elegant ways to do this, but the for loop is the most understandable
+```{r}
 make_set <- function(id1, id2, deck = set_deck) {
   opts <- tibble(
     num = 1:3,
@@ -97,34 +131,267 @@ make_set <- function(id1, id2, deck = set_deck) {
     shape = c("oval", "diamond", "tilde"),
     fill = c("solid", "empty", "lines")
   )
-  cards <- filter(set_deck, id %in% c(id1, id2))
-                  
-  card3 <- cards[1,1:4]
-  # this just gets the correct structure with no rows
+  cards <- filter(set_deck, card_id %in% c(id1, id2))
+
+  attr_list <- c("num", "color", "shape", "fill")
   
-  for(i in c("num", "color", "shape", "fill")) { # leave out id
+  card3 <- cards[1,1:4]
+  # this just gets the correct structure with a single row
+  
+  for (i in attr_list) { # leave out id
     card3[,i] <- attrib_coalesce(cards[[i]], opts[[i]])
   }
-  card3$id <- inner_join(set_deck, card3)
-  return(card3$id)
+  
+  card3 <- inner_join(set_deck, card3, by = attr_list) # get the card ID out from the attributes
+  return(card3$card_id)
 }
+```
 
-make_set(1, 2)
+Now, we have the ability to make a set from any two given cards. I've used id values here because it's simpler (but it depends on each card having an ID number as defined above). 
 
-all_2_card_combos <- crossing(card1 = set_deck$id, card2 = set_deck$id) %>%
-  filter(card1 != card2) # get rid of duplicates
+Let's test this function out:
+```{r}
+filter(set_deck, card_id %in% c(1, 2, make_set(1, 2)))
 
+filter(set_deck, card_id %in% c(1, 53, make_set(1, 53)))
+
+filter(set_deck, card_id %in% c(59, 53, make_set(59, 53)))
+```
+
+So then to play set we need to build a list of all valid sets (so that we can check whether a set of cards contains a valid set...). This takes forever to run, so I've run it once and saved the result.
+
+```{r, eval = F}
+all_2_card_combos <- crossing(card1 = set_deck$card_id, card2 = set_deck$card_id) %>%
+  # get rid of duplicates (card1, card2) is the same as (card2, card1)
+  filter(card1 > card2)
+
+# I'm using purrr here but you could do this with a loop; 
+# I just am lazy and don't want to write the code...
+# I haven't figured out how to do this without duplicating some sets... :(
 all_sets <- all_2_card_combos %>%
-  mutate(card3 = purrr::map2_int(card1, card2, make_set))
+  mutate(card3 = purrr::map2_int(card1, card2, make_set),
+         set_id = 1:n())
 
+# Cleaning up a bit to remove duplicates
+all_sets <- all_sets %>%
+  # first, move to long form so that order is fixed
+  pivot_longer(cols = -set_id, names_to = "card_num", values_to = "card_id") %>%
+  group_by(set_id) %>%
+  arrange(set_id, card_id) %>%
+  mutate(card_num = 1:n()) %>%
+  # then, move to wide form and identify duplicates
+  pivot_wider(names_from = card_num, names_prefix = "card", values_from = card_id) %>%
+  group_by(card1, card2, card3) %>%
+  arrange(set_id) %>%
+  # remove duplicates
+  slice_head(n = 1) %>%
+  # move back to long form
+  pivot_longer(starts_with("card"), names_to = "card_num", values_to = "card_id") %>%
+  select(-card_num)
+
+save(set_deck, all_sets, file = "Set_Data.Rdata")
 ```
 
 ```{r}
-set_present <- function(cards) {
+load("Set_Data.Rdata")
+```
+
+Now, we need a way to check whether there is a set in the 12 cards which are dealt (e.g. on the table)
+```{r}
+set_present <- function(deck, setlist = all_sets) {
+  cards <- filter(deck, card_location == "table")
+  # If there are no cards on the table, return an empty list
+  if (nrow(cards) == 0) return(tibble(set_id = NULL, n = 3))
   
+  res <- inner_join(setlist, cards, by = "card_id") %>%
+    group_by(set_id) %>%
+    count() %>%
+    filter(n == 3) %>%
+    ungroup()
   
+  return(res)
 }
 
+```
+
+Lets make sure this function actually works as expected
+```{r}
+set.seed(2034902)
+dealt_cards <- deal_set(set_deck)
+
+# Testing it out
+res <- dealt_cards %>% set_present()
+
+table_cards <- dealt_cards %>% 
+  filter(card_location == "table")
+
+table_cards
+
+# Get card numbers in each set
+left_join(res, all_sets, by = "set_id") %>%
+  # See if the selected cards are actually in the proper set
+  left_join(table_cards, by = "card_id")
+```
+So in this example, only one set is on the board, and we would have no choice but to remove that set.
+
+Then, we need to write something to keep track of what cards are still on the table (e.g. we need to remove a set of 3 cards from the table if there is a set present). We can update the location of these cards as in the discard pile. 
+
+We might also want to track what round something was removed or dealt in; to do that it will be helpful to write a helper function 
+
+```{r}
+add_note_col <- function(deck, index, name, value) {
+  if (!name %in% names(deck)) {
+    deck[[name]] <- NA
+  }
+  
+  deck[[name]][index] <- value
+  
+  return(deck)
+}
+```
+
+This function checks to see if a column exists first, and if not, it creates the column. Then, it sets `index` values of the column named `name` to `value` and returns the deck. This way, we can use this function to track both when a card is dealt, and when the card is then removed by passing different note-column names into the function. 
+
+Now that we have our helper function, we can write the `remove_set` function and add the note functionality to our `deal_set` function. 
+
+```{r}
+remove_set <- function(deck, note = NA) { 
+  # note allows us to keep track of e.g. what round a set was selected on...
+  cards <- filter(deck, card_location == "table")
+  
+  # removes a random set of the list of sets which are present
+  sets <- set_present(cards)
+  
+  if (nrow(sets) > 0)  {
+    set_removed <- sets %>%
+      slice_sample(n = 1) %>%
+      left_join(all_sets, by = "set_id") %>%
+      left_join(cards, by = "card_id")
+    
+    deck <- deck %>%
+      mutate(idx = card_id %in% set_removed$card_id) %>%
+      mutate(card_location = ifelse(idx, "discard", card_location))
+    
+    if (!is.na(note)) {
+      deck <- add_note_col(deck, deck$idx, "remove_note", note) 
+    }
+    
+    
+    deck <- arrange(deck, desc(card_location)) %>%
+      select(-idx)
+  }
+
+  return(deck)
+}
+
+# Update deal_set function to handle a note if we want it to...
+deal_set <- function(deck, n = 12, note = NA) {
+  available <- filter(deck, card_location == "deck")
+  if (nrow(available) < n) {
+    # if there are fewer cards available than requested, deal any remaining cards
+    dealt_cards <- available$card_id
+  } else {
+    # otherwise, sample
+    dealt_cards <- sample(available$card_id, size = n, replace = F)
+  }
+  
+  deck <- deck %>%
+    mutate(idx = card_id %in% dealt_cards) %>%
+    mutate(card_location = ifelse(idx, "table", card_location))
+  
+  if (!is.na(note)) {
+    deck <- add_note_col(deck, deck$idx, "deal_note", note)
+  }
+  
+  return(deck %>% select(-idx))
+}
+```
+
+Let's test this out:
+```{r}
+set.seed(42093482)
+res <- deal_set(set_deck, note = 1) %>%
+  remove_set(note = 1)
+
+res %>% group_by(card_location) %>% count()
+
+filter(res, card_location == "discard")
+
+filter(res, deal_note == 1)
+```
+
+The rules specify that if no sets are present, 3 more cards are drawn from the deck. Alternately, if there are fewer than 12 cards present, we would draw 3 more cards from the deck.
+```{r}
+update_deal <- function(deck, note = NA) {
+    ntable <- sum(deck$card_location == "table")
+    ndeck <- sum(deck$card_location == "deck")
+    ndiscard <- sum(deck$card_location == "discard")
+  
+  no_set_present <- nrow(set_present(deck)) == 0
+  
+  # Start with testing if current_cards has anything in it - if not, deal
+  if (ntable == 0) {
+    return_deck <- deal_set(deck, n = 12, note = note)
+  } else if (ntable < 12) {
+    # If there are less than 12 cards left, add 3 cards
+    return_deck <- deal_set(deck, n = 3, note = note)
+  } else if (no_set_present) {
+    # If there's no set present, add 3 cards
+    return_deck <- deal_set(deck, n = 3, note = note)
+  } else {
+    # Otherwise, no updates are necessary
+    return_deck <- deck
+  }
+  
+  return_deck <- arrange(return_deck, desc(card_location))
+  
+  return(deck = return_deck)
+}
+
+
+
+# First deal
+deck <- update_deal(set_deck, note = 1) 
+# Find set
+deck <- remove_set(deck, note = 1)
+# Update dealt cards
+deck <- update_deal(deck, note = 2)
+# Find set
+deck <- remove_set(deck, note = 2)
+
+deck
+```
+
+To play a game, we might want to alternate update_deal and remove_set. I've added a contingency in to stop the while loop if 
+
+- there are no cards left in the deck
+- the loop runs 3x with the same exact deck
+- the loop runs more than 40 times (there are 27 sets, so >40 is a big red flag)
+
+```{r}
+set_game <- function() {
+  deck <- set_deck
+  
+  idx <- 1
+  same_deck <- 0
+  while (sum(deck$card_location == "deck") > 0 & same_deck < 3 & idx < 40) {
+    deck <- update_deal(deck, note = idx) 
+    deck_tmp <- remove_set(deck, note = idx)
+    if (isTRUE(all.equal(deck, deck_tmp))) {
+      # warning("Same deck detected\n")
+      same_deck <- same_deck + 1
+    } else {
+      same_deck <- 0
+    }
+    idx <- idx + 1
+    deck <- deck_tmp
+  }
+  
+  return(deck)
+}
+
+res <- set_game()
+res
 ```
 
 
@@ -132,8 +399,14 @@ set_present <- function(cards) {
 
 > For instance, if you are simulating set, you may want to know the probability that an array of 12 cards does not contain a set. (You can check your answers by reading the rules of the game, if you want). If you are simulating blackjack, you may want to know what the [expected return on a specific strategy is](https://towardsdatascience.com/python-blackjack-simulator-61b591ffb971) (hint: if you're beating the dealer, your simulation is probably wrong). 
 
+***
 
+So I've stored a record of an entire game of set in the data frame: what can I do with it now?
 
+- I could see how often there are 0, 3, 6, 9, or 12 cards left
+- I could see how often there isn't a set with any given 12 cards
+    - I could examine this in the context of a full game, or in the context of random draws
+- I could see how long a card is usually left on the table before it's part of a set
 
 ### Design a simulation to answer the question you identified
 
@@ -141,3 +414,106 @@ Run your simulation with an increasing number of iterations and create some sort
 
 Describe any issues you encountered in your simulation, and how you addressed them (or where the whole thing went off the rails, if you couldn't address everything in time). 
 
+***
+
+First, lets run 1000 games of set and store the results in a data frame:
+
+```{r, eval = F}
+set500 <- replicate(500, set_game(), simplify = F) # list of 1000 set games
+save(set500, file = "500_set_games.Rdata")
+```
+
+```{r}
+load("500_set_games.Rdata")
+```
+
+#### Distribution of # cards left
+
+For loop version:
+```{r, eval = F}
+res <- c()
+for(i in set500) {
+  res <- c(res, sum(is.na(i$remove_note)))
+}
+
+set_stats <- tibble(data = set500, cards_left = res)
+```
+
+purrr version:
+```{r}
+set_stats <- tibble(data = set500) %>%
+  mutate(cards_left = purrr::map_int(data, ~sum(is.na(.$remove_note))))
+```
+
+```{r}
+table(set_stats$cards_left)
+
+ggplot(set_stats, aes(x = cards_left)) + 
+  geom_histogram(binwidth = 1) + 
+  scale_x_continuous("Cards left", limits = c(0, 15), breaks = seq(0, 15, by = 3)) + 
+  scale_y_continuous("# Simulations") + 
+  ggtitle("Number of cards remaining at the end of the game")
+```
+
+#### How often is there not a set in 12 cards?
+
+##### In a game situation
+
+First, we have to get the information out of our simulated trial data. We have the number of cards dealt in each round; to figure out how many rounds there were where there were 12 cards present and there wasn't a set, we need to look for missing remove_set indices: 
+
+- deal 3 cards -> remove set -> 9 cards present (presumably)
+- deal 3 cards -> 12 cards present -> remove_set but no set found -> 12 cards still there
+- deal 3 cards -> 15 cards present -> remove_set
+
+```{r}
+set500[[1]] %>% 
+  count(remove_note) %>% 
+  right_join(tibble(remove_note = 1:max(.$remove_note, na.rm = T))) %>%
+  pluck("n") %>%
+  is.na() %>%
+  sum()
+
+count_missing_removals <- function(game) {
+  game %>% 
+  count(remove_note) %>% 
+  right_join(tibble(remove_note = 1:max(.$remove_note, na.rm = T)), by = "remove_note") %>%
+  pluck("n") %>%
+  is.na() %>%
+  sum()
+}
+
+set_stats <- set_stats %>%
+  mutate(skipped_removals = purrr::map_int(data, count_missing_removals),
+         number_rounds = purrr::map_dbl(data, ~max(.$remove_note, na.rm = T)))
+
+ggplot(set_stats, aes(x = skipped_removals)) + geom_histogram(binwidth = 1, fill = "white", color = "black")
+```
+
+This tells us that in a normal set game, we would expect to have `r mean(set_stats$skipped_removals)` instances where there is not an available set on the board. Given that each game has on average `r mean(set_stats$number_rounds)` rounds, we can calculate the percentage of rounds in each game which don't have sets as `r mean(set_stats$skipped_removals/set_stats$number_rounds)`. 
+
+##### In a random draw
+
+We could also look at the distribution of initial deals to get a sense of the same basic issue outside of the context of a full game. 
+
+```{r}
+draw_1000_sets <- replicate(1000, set_deck %>% deal_set(n = 12), simplify = F)
+single_deal <- tibble(deal = draw_1000_sets, sets = purrr::map_int(deal, ~nrow(set_present(.))))
+```
+
+In this situation, the proportion of "fresh deals" without a set is `r mean(single_deal$sets == 0)`. 
+
+We can conclude from this that it is more common to run into a combination of 12 cards that have no valid set in a full game than it is in a fresh random deal of 12 cards. This makes sense: once some sets have been removed from the deck, the remaining cards may be less likely to form a set (because critical cards aren't available). 
+
+#### How long is a card on the table, on average?
+
+We've recorded the round a card is dealt in, and the round a card is removed in, so we have a way to get the number of rounds a card sits on the table. 
+
+```{r}
+
+set_stats <- set_stats %>%
+  mutate(rounds_on_table = purrr::map_dbl(data, ~mean(.$remove_note - .$deal_note, na.rm = T)))
+
+ggplot(set_stats, aes(x = rounds_on_table)) + geom_density()
+```
+
+Cards are on the table for an average of between 2 and 3.5 rounds; the mode is around 2.5. This is censored, however, because some cards always remain on the table. 
