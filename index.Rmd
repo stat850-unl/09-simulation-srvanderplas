@@ -162,6 +162,8 @@ pick_card_out_suit <- function(cards, hearts_avail = F) {
 
   # If hearts aren't available and there are other suits,
   # filter out the hearts
+  # Note that this still allows the Queen of Spades to 
+  # be played at any time (which then makes hearts available)
   if (nonhearts & !hearts_avail) {
     card_options <- cards %>% filter(suit != "hearts")
   }
@@ -219,7 +221,7 @@ eval_trick <- function(cards, spec_suit, trick_num = NA) {
 }
 
 # Remove cards from deck that have been played and bind on as a played trick
-fix_deck(dealt, trick) {
+fix_deck <- function(dealt, trick) {
   dealt %>%
     anti_join(trick, by = c("suit", "value", "player", "id")) %>%
     bind_rows(trick)
@@ -377,7 +379,7 @@ In a shoot the moon scenario, the total game points will be (n-1) times normal, 
 
 ```{r}
 shoot_the_moon <- function(data) {
-  sum(data$score) > 26
+  sum(data$score == 26)
 }
 ```
 
@@ -388,22 +390,58 @@ Run your simulation with an increasing number of iterations and create some sort
 Describe any issues you encountered in your simulation, and how you addressed them (or where the whole thing went off the rails, if you couldn't address everything in time). 
 
 ```{r, eval = F}
-# I'm saving the results of this so that I only have to run it once...
-games <- replicate(1000, hearts(c("Amy", "Beth", "Cara", "Dawn")), simplify = F) # play 1000 games of hearts
+# I'm saving the results of this so that I only 
+# have to run it once...
+
+# This uses parallel processing to take advantage of the 
+# fact that I wrote this on a server with 16 cores and 
+# a lot of memory.
+# May as well use the power if you have the option!
+library(parallel)
+set.seed(34029)
+#... then parallel replicate...
+games <- mclapply(1:10000, FUN = function(i) { hearts(c("Susan", "Caroline", "Mom", "Dad")) }, mc.preschedule = F, mc.set.seed = T, mc.cores = 16, mc.cleanup = T)
 
 save(games, file = "games.Rdata")
-
-games2 <- replicate(9000, hearts(c("Amy", "Beth", "Cara", "Dawn")), simplify = F) # play 1000 games of hearts
-
-save(c(games, games2), file = "games.Rdata")
 ```
 ```{r}
 load("games.Rdata")
 res <- tibble(
   full_game = games, 
   score = purrr::map(full_game, calc_score),
-  stm = purrr::map_lgl(score, shoot_the_moon)
+  stm = purrr::map_int(score, shoot_the_moon)
 )
 ```
 
-From this assessment, one player shoots the moon in approximately `r sprintf("%0.2f%%", 100*mean(res$stm))` of games played using the naive strategy
+From this assessment, one player shoots the moon in approximately `r sprintf("%0.2f%%", 100*mean(res$stm > 0))` of games played using the naive strategy. My parents were probably pretty reasonably assuming that they could explain that part of the strategy later, once we'd grasped the fundamentals of the game.
+
+I wish I had time to add in some strategy component, but I think at this point that would be excessive. 
+
+
+Note that we can compute other interesting quantities from our simulated set of games, such as the total proportion of points on the board once there $x$ tricks played.
+
+```{r}
+points_trick_cumulative <- function(game) {
+  game %>%
+    group_by(trick) %>%
+    summarize(points = sum(points))
+}
+
+library(parallel)
+points_cumulative <- res %>%
+  select(full_game) %>%
+  mutate(tmp = mclapply(full_game, points_trick_cumulative, mc.cores = 16)) 
+
+points_cumulative %>%
+  mutate(id = 1:n()) %>%
+  unnest(tmp) %>%
+  group_by(id) %>%
+  mutate(points_played = cumsum(points),
+         point_pct = points_played/sum(points)) %>%
+  ggplot(aes(x = factor(trick), y = points_played)) + 
+  geom_violin(scale = "width") + 
+  xlab("Trick") + ylab("Points played") + 
+  geom_smooth(aes(x = trick), method = "gam", se = F)
+```
+
+In most games, the Queen of Spades is played first, resulting in a 13-point jump. Then, the remaining hearts are played. By the end of the game, there are usually only a few hearts remaining, leading to very interesting looking violin plots. 
